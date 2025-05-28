@@ -6,7 +6,7 @@ from cae import build_cae
 from sklearn.model_selection import train_test_split
 
 # === Config ===
-DATA_DIR = r"H:\image-anomaly-detection\data\bottle\train"
+DATA_DIR = r"H:\image-anomaly-detection\bottle\train\good"
 IMG_SIZE = (128, 128)
 BATCH_SIZE = 32
 EPOCHS = 20
