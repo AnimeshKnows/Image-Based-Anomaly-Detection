@@ -40,6 +40,7 @@ X_train, X_val = train_test_split(X, test_size=0.1, random_state=42)
 
 # === Build & Train Model ===
 model = build_cae(input_shape)
+model.compile(optimizer='adam', loss='mse', metrics=['accuracy'])
 model.summary()
 
 print("Training model...")
