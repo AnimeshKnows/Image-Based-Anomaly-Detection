@@ -1,63 +1,62 @@
 import os
 import cv2
 import numpy as np
-import tensorflow as tf
-import matplotlib.pyplot as plt
+from cae import build_cae
 
-from cae import build_cae  # import your model architecture
-
-# === Config ===
-MODEL_PATH = "models/cae_bottle.h5"
-TEST_DIR = r"H:\image-anomaly-detection\bottle\test"
-OUTPUT_DIR = "outputs"
-IMG_SIZE = (128, 128)
-
-# === Load and Preprocess ===
-def load_and_preprocess(img_path):
+def load_and_preprocess(img_path, img_size):
     img = cv2.imread(img_path, cv2.IMREAD_COLOR)
     if img is None:
         return None
-    img = cv2.resize(img, IMG_SIZE)
+    img = cv2.resize(img, img_size)
     img = img.astype('float32') / 255.0
     return img
 
-# === Load Model ===
-print("[INFO] Loading model...")
-model = build_cae(input_shape=(IMG_SIZE[0], IMG_SIZE[1], 3))
-model.load_weights(MODEL_PATH)
-print("[INFO] Model loaded.")
+def run_inference(model, test_dir, output_dir, img_size, samples_per_class=3):
+    print("[INFER] Running inference...")
+    os.makedirs(output_dir, exist_ok=True)
+    result_list = []
 
-# === Inference Loop ===
-print("[INFO] Running inference...")
-for defect_type in os.listdir(TEST_DIR):
-    class_dir = os.path.join(TEST_DIR, defect_type)
-    output_class_dir = os.path.join(OUTPUT_DIR, defect_type)
-    os.makedirs(output_class_dir, exist_ok=True)
+    for defect_type in os.listdir(test_dir):
+        class_dir = os.path.join(test_dir, defect_type)
+        output_class_dir = os.path.join(output_dir, defect_type)
+        os.makedirs(output_class_dir, exist_ok=True)
 
-    for img_name in os.listdir(class_dir):
-        img_path = os.path.join(class_dir, img_name)
-        img = load_and_preprocess(img_path)
-        if img is None:
-            continue
+        img_names = os.listdir(class_dir)[:samples_per_class]  # Only a few samples
+        for img_name in img_names:
+            img_path = os.path.join(class_dir, img_name)
+            img = load_and_preprocess(img_path, img_size)
+            if img is None:
+                continue
 
-        input_img = np.expand_dims(img, axis=0)  # Add batch dim
-        recon_img = model.predict(input_img)[0]
+            input_img = np.expand_dims(img, axis=0)
+            recon_img = model.predict(input_img)[0]
 
-        # === Anomaly Map (Absolute Error) ===
-        error_map = np.abs(img - recon_img)
-        heatmap = np.mean(error_map, axis=-1)  # Grayscale
+            # Error map & heatmap
+            error_map = np.abs(img - recon_img)
+            heatmap = np.mean(error_map, axis=-1).astype(np.float32)   # Grayscale
 
-        # === Normalize heatmap for display ===
-        heatmap_norm = cv2.normalize(heatmap.astype(np.float32), None, 0, 255, cv2.NORM_MINMAX)
-        heatmap_colored = cv2.applyColorMap(heatmap_norm.astype(np.uint8), cv2.COLORMAP_JET)
+            # Fix: handle flat images and silence Pylance
+            if np.max(heatmap) != np.min(heatmap):
+                heatmap_norm = cv2.normalize(heatmap, None, 0, 255, cv2.NORM_MINMAX)  # type: ignore
+            else:
+                heatmap_norm = np.zeros_like(heatmap, dtype=np.uint8)
+            heatmap_colored = cv2.applyColorMap(heatmap_norm.astype(np.uint8), cv2.COLORMAP_JET)
+            overlay = cv2.addWeighted((img * 255).astype(np.uint8), 0.6, heatmap_colored, 0.4, 0)
+            base = os.path.splitext(img_name)[0]
+            cv2.imwrite(os.path.join(output_class_dir, f"{base}_input.png"), (img * 255).astype(np.uint8))
+            cv2.imwrite(os.path.join(output_class_dir, f"{base}_recon.png"), (recon_img * 255).astype(np.uint8))
+            cv2.imwrite(os.path.join(output_class_dir, f"{base}_heatmap.png"), heatmap_colored)
+            cv2.imwrite(os.path.join(output_class_dir, f"{base}_overlay.png"), overlay)
 
-        # === Overlay on original ===
-        overlay = cv2.addWeighted((img * 255).astype(np.uint8), 0.6, heatmap_colored, 0.4, 0)
+            # Store results for visualization
+            result_list.append({
+                'input': img,
+                'recon': recon_img,
+                'heatmap': heatmap,
+                'overlay': overlay,
+                'class': defect_type,
+                'name': base
+            })
 
-        # === Save Results ===
-        cv2.imwrite(os.path.join(output_class_dir, f"{os.path.splitext(img_name)[0]}_input.png"), (img * 255).astype(np.uint8))
-        cv2.imwrite(os.path.join(output_class_dir, f"{os.path.splitext(img_name)[0]}_recon.png"), (recon_img * 255).astype(np.uint8))
-        cv2.imwrite(os.path.join(output_class_dir, f"{os.path.splitext(img_name)[0]}_heatmap.png"), heatmap_colored)
-        cv2.imwrite(os.path.join(output_class_dir, f"{os.path.splitext(img_name)[0]}_overlay.png"), overlay)
-
-print("[INFO] Inference completed. Results saved in:", OUTPUT_DIR)
+    print(f"[INFER] Inference complete. Results saved to '{output_dir}'.")
+    return result_list
